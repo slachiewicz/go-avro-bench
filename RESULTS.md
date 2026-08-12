@@ -105,9 +105,10 @@ The real arguments for `twmb/avro` are elsewhere: roughly half the memory on
 union-heavy payloads, one maintained library instead of one maintained and one
 archived, and alignment with `redpanda-data/connect`, which made this exact
 migration in [#4195](https://github.com/redpanda-data/connect/pull/4195) and
-deleted 865 lines of normalisation code doing so.
+deleted its 571-line normalisation walker doing so.
 
-Set against that: the union representation change breaks user Bloblang mappings,
-and connect's PR documents further breaks in decimal and fixed handling. That is
-a behaviour and maintenance decision. It should not be argued on speed, because
-on Bento's access pattern the speed argument runs the other way.
+Set against that: the union representation change breaks user Bloblang mappings.
+The decimal and fixed breaks connect's PR documents are not library properties —
+probing all four shows decimals decode to `*big.Rat` everywhere and the `fixed`
+split falls on the fork line; those breaks came from connect's own JSON layer.
+See [CAPABILITIES.md](CAPABILITIES.md).

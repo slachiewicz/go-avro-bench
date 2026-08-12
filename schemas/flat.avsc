@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "Flat",
+  "namespace": "bench",
+  "fields": [
+    {"name": "id", "type": "int"},
+    {"name": "seq", "type": "long"},
+    {"name": "name", "type": "string"},
+    {"name": "ratio", "type": "float"},
+    {"name": "total", "type": "double"},
+    {"name": "active", "type": "boolean"},
+    {"name": "blob", "type": "bytes"}
+  ]
+}

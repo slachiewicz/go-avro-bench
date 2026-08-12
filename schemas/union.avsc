@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "Event",
+  "namespace": "bench",
+  "fields": [
+    {"name": "id", "type": "string"},
+    {"name": "source", "type": {"type": "enum", "name": "Source", "symbols": ["WEB", "MOBILE", "BATCH"]}},
+    {"name": "user_id", "type": ["null", "string"], "default": null},
+    {"name": "score", "type": ["null", "double"], "default": null},
+    {"name": "retries", "type": ["null", "int"], "default": null},
+    {"name": "labels", "type": {"type": "map", "values": "string"}},
+    {"name": "tags", "type": {"type": "array", "items": "string"}},
+    {"name": "payload", "type": ["null", "bytes"], "default": null}
+  ]
+}

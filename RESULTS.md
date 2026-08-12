@@ -6,8 +6,10 @@ Regenerate with `make bench && make stat`.
 Library versions are branch tips, not tags — which turns out to matter, see
 below. hamba is pinned at v2.31.0 because that is its final release.
 
-Collected in five processes rather than one sweep, all from the same tree.
-434 benchmark arms, 4,340 timed runs, roughly 2.7 billion iterations.
+434 benchmark arms, 10 samples each, 5.0 billion iterations, collected in
+separate processes per family from one tree. Raw data is in `part1.txt` through
+`part5.txt`. The `v1.7.2` column in the version section below is the only figure
+from an earlier run, kept because its raw file has since been overwritten.
 
 ## The path Bento actually runs
 
@@ -16,21 +18,21 @@ Collected in five processes rather than one sweep, all from the same tree.
 tables further down do, gets the ranking wrong — the second stage is the larger
 part of the cost.
 
-`DecodeStage`, goavro, `flat`: native **334.9n**, textual **1.148µ**. The stage
-this file used to omit is 77% of the work.
+`DecodeStage`, goavro, `flat`: native **264.3n**, textual **960.7n**. The stage
+this file used to omit is 78% of the work.
 
 ### End to end, Confluent-framed binary in, JSON bytes out
 
 | Schema | twmb | goavro-plain | goavro-stdjson | hamba | iskorotkov |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| flat | **1.056µ** | 1.433µ | 1.494µ | 2.244µ | 2.322µ |
-| nested | **3.124µ** | 4.760µ | 4.766µ | 6.539µ | 6.549µ |
-| union | **2.940µ** ±19% | 3.800µ | 3.497µ | 3.865µ | 3.832µ |
-| wide | **6.582µ** | 11.02µ | 10.07µ | 11.27µ | 11.35µ |
+| flat | **891.1n** | 1.220µ | 1.223µ | 1.829µ | 1.806µ |
+| nested | **2.576µ** | 3.969µ | 3.977µ | 5.373µ | 5.345µ |
+| union | **2.369µ** | 3.083µ | 2.894µ | 3.248µ | 3.251µ |
+| wide | **6.046µ** | 10.17µ | 9.350µ | 10.48µ | 10.57µ |
 
-twmb wins every case, by 1.36× to 1.71× over the better goavro mode. On
-allocations the gap is wider: `wide` costs twmb **50** against goavro's 137-158
-and hamba's 169.
+twmb wins every case, by 1.22× to 1.55× over whichever goavro mode is faster,
+and by 1.73× to 2.05× over hamba. On allocations the gap is wider: `wide` costs
+twmb **50** against goavro's 137-158 and hamba's 169.
 
 That reverses what the single-stage numbers say, where goavro leads on `flat`
 and `nested`. Both are correct measurements of different things; only one of
@@ -40,18 +42,21 @@ them is the thing a pipeline pays.
 
 | Schema | twmb-bare | twmb-wrapped | goavro-plain | goavro-stdjson |
 | --- | ---: | ---: | ---: | ---: |
-| flat | 1.677µ | 1.512µ | 1.385µ | **1.372µ** |
-| nested | 4.954µ | **4.391µ** | 4.450µ | 4.568µ |
-| union | **3.322µ** | 4.020µ | 3.864µ | 5.640µ |
-| wide | **10.04µ** | 15.88µ | 13.53µ | **31.37µ** |
+| flat | 1.485µ | 1.342µ | **1.207µ** | 1.223µ |
+| nested | 4.160µ | 3.714µ | 3.853µ | 3.826µ |
+| union | **2.845µ** | 3.308µ | 3.283µ | 4.645µ |
+| wide | **8.061µ** | 11.94µ | 11.46µ | 25.21µ |
+
+goavro leads `flat`; `nested` is a three-way tie inside a 4% spread. twmb leads
+`union` and `wide` outright. Encoding is the one direction where goavro is
+genuinely competitive.
 
 `bare` and `wrapped` are the two JSON dialects: bare values against goavro's
 tagged-union envelope. Each is paired with the goavro mode that speaks the same
 dialect.
 
-goavro's std-JSON mode costs **31.37µ on `wide`, 2.3× its own plain mode**
-(±4% against ±1%, so not noise). Union-heavy records are exactly where that mode
-gets chosen.
+goavro's std-JSON mode costs **25.21µ on `wide`, 2.2× its own plain mode**, both
+at ±0-1%. Union-heavy records are exactly where that mode gets chosen.
 
 ### What the coercion walker costs
 
@@ -61,12 +66,15 @@ arms are absent above. With the 220-line walker from
 
 | Schema | hamba | iskorotkov | twmb-bare (no walker) |
 | --- | ---: | ---: | ---: |
-| nested | 9.105µ | 8.373µ | **4.905µ** |
-| union | 5.281µ | 5.258µ | **3.580µ** |
-| wide | 16.60µ | 16.54µ | **9.734µ** |
+| flat | 2.390µ | 2.395µ | **1.500µ** |
+| nested | 6.785µ | 6.707µ | **4.135µ** |
+| union | 4.332µ | 4.362µ | **2.848µ** |
+| wide | 13.19µ | 13.19µ | **8.071µ** |
 
-Shimmed, they lose to unshimmed twmb by 1.7-1.9×. The walker does not buy back
-the gap; it only makes the comparison possible.
+Shimmed, they lose to unshimmed twmb by 1.52× to 1.64×. The walker does not buy back
+the gap; it only makes the comparison possible. `twmb-bare` is the control
+because it needs no walker; `twmb-wrapped` is faster still on flat and nested,
+so this understates the gap.
 
 ## Object container files
 
@@ -79,9 +87,12 @@ snappy, no skips. `OCFWrite`, 1000 records, deflate:
 | flat, dynamic | 1.349m | 1.329m | 357.3µ | **303.4µ** |
 | nested, typed | 1.006m | 1.011m | **478.9µ** | n/a |
 | nested, dynamic | 2.748m | 2.884m | 792.7µ | **640.3µ** |
+| union, dynamic | 2.415m | 2.453m | 968.5µ | **855.2µ** |
+| wide, dynamic | 5.942m | 5.801m | **1.806m** | 2.507m |
 
 twmb is 3.2× faster than hamba writing typed, and hamba is 3.8× behind twmb
-writing dynamic. goavro leads the dynamic column, having no typed mode to offer.
+writing dynamic. goavro leads the dynamic column on every shape except `wide`,
+where twmb takes it back by 1.39×. goavro has no typed mode to offer.
 
 
 ## Library version is worth as much as library choice
@@ -192,7 +203,7 @@ apparent cost.
 | --- | ---: | ---: | ---: |
 | flat | **12.23µ** | 14.01µ | 34.29µ |
 
-goavro and twmb are close now — on its previous tag twmb was 2.4× behind here.
+goavro and twmb are close now; twmb's previous tag was 2.4× slower than twmb is today.
 twmb allocates least: 190 against goavro's 271 and hamba's 621.
 
 Parsing costs roughly 20–70× a single decode either way, so whether a pipeline

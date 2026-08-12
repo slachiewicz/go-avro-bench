@@ -29,7 +29,10 @@ const ocfRecords = 1000
 // Skip anywhere below — that uniformity is itself a finding, not an omission.
 var ocfCodecs = []string{"null", "deflate", "snappy"}
 
-// buildHambaOCF encodes n copies of v into an in-memory OCF container.
+// buildHambaOCF encodes n copies of v into an in-memory OCF container. v is a
+// typed struct for the "typed" arms and, for "dynamic", an any holding the
+// shape hamba's own dynamic decode produces — the Encoder accepts both the
+// same way Marshal does.
 func buildHambaOCF(schema hamba.Schema, v any, codecName string, n int) ([]byte, error) {
 	var buf bytes.Buffer
 	enc, err := hambaocf.NewEncoderWithSchema(schema, &buf, hambaocf.WithCodec(hambaocf.CodecName(codecName)))
@@ -120,7 +123,12 @@ func buildGoavroOCF(schemaJSON string, native any, codecName string, n int) ([]b
 }
 
 // BenchmarkOCFWrite writes ocfRecords copies of a Case into an in-memory OCF
-// container, per library and compression codec.
+// container, per library and compression codec, under both "typed" (encode
+// from a generated Go struct) and "dynamic" (encode from a native value).
+// goavro only ever has the dynamic path, so its typed arm Skips rather than
+// leaving goavro implicitly compared against the other three's typed numbers
+// — see BenchmarkEncodingDecode's doc comment for why that distinction
+// matters in this repo specifically.
 func BenchmarkOCFWrite(b *testing.B) {
 	for _, c := range Cases {
 		b.Run(c.Name, func(b *testing.B) {
@@ -137,66 +145,132 @@ func BenchmarkOCFWrite(b *testing.B) {
 				b.Fatal(err)
 			}
 
+			var hambaNative any
+			if err := hamba.Unmarshal(hambaSchema, c.Payload, &hambaNative); err != nil {
+				b.Fatal(err)
+			}
+			var iskoNative any
+			if err := isko.Unmarshal(iskoSchema, c.Payload, &iskoNative); err != nil {
+				b.Fatal(err)
+			}
+			var twmbNative any
+			if _, err := twmbSchema.Decode(c.Payload, &twmbNative); err != nil {
+				b.Fatal(err)
+			}
+
 			for _, codecName := range ocfCodecs {
 				b.Run(codecName, func(b *testing.B) {
-					b.Run("hamba", func(b *testing.B) {
-						container, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							if _, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords); err != nil {
+					b.Run("typed", func(b *testing.B) {
+						b.Run("hamba", func(b *testing.B) {
+							container, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords)
+							if err != nil {
 								b.Fatal(err)
 							}
-						}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("iskorotkov", func(b *testing.B) {
+							container, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("twmb", func(b *testing.B) {
+							container, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("goavro", func(b *testing.B) {
+							b.Skipf("goavro has no typed struct mode; see the dynamic arm")
+						})
 					})
 
-					b.Run("iskorotkov", func(b *testing.B) {
-						container, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							if _, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords); err != nil {
+					b.Run("dynamic", func(b *testing.B) {
+						b.Run("hamba", func(b *testing.B) {
+							container, err := buildHambaOCF(hambaSchema, hambaNative, codecName, ocfRecords)
+							if err != nil {
 								b.Fatal(err)
 							}
-						}
-					})
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildHambaOCF(hambaSchema, hambaNative, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
 
-					b.Run("twmb", func(b *testing.B) {
-						container, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							if _, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords); err != nil {
+						b.Run("iskorotkov", func(b *testing.B) {
+							container, err := buildIskoOCF(iskoSchema, iskoNative, codecName, ocfRecords)
+							if err != nil {
 								b.Fatal(err)
 							}
-						}
-					})
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildIskoOCF(iskoSchema, iskoNative, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
 
-					b.Run("goavro", func(b *testing.B) {
-						container, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							if _, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords); err != nil {
+						b.Run("twmb", func(b *testing.B) {
+							container, err := buildTwmbOCF(twmbSchema, twmbNative, codecName, ocfRecords)
+							if err != nil {
 								b.Fatal(err)
 							}
-						}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildTwmbOCF(twmbSchema, twmbNative, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("goavro", func(b *testing.B) {
+							container, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								if _, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
 					})
 				})
 			}
@@ -205,7 +279,10 @@ func BenchmarkOCFWrite(b *testing.B) {
 }
 
 // BenchmarkOCFRead reads all ocfRecords records back out of a container built
-// once per library and codec, outside the timed loop.
+// once per library, codec and mode, outside the timed loop. "typed" decodes
+// into a generated Go struct; "dynamic" decodes into map[string]any. goavro
+// only ever has the dynamic path, so its typed arm Skips — see
+// BenchmarkEncodingDecode's doc comment for why that distinction matters here.
 func BenchmarkOCFRead(b *testing.B) {
 	for _, c := range Cases {
 		b.Run(c.Name, func(b *testing.B) {
@@ -222,102 +299,198 @@ func BenchmarkOCFRead(b *testing.B) {
 				b.Fatal(err)
 			}
 
+			var hambaNative any
+			if err := hamba.Unmarshal(hambaSchema, c.Payload, &hambaNative); err != nil {
+				b.Fatal(err)
+			}
+			var iskoNative any
+			if err := isko.Unmarshal(iskoSchema, c.Payload, &iskoNative); err != nil {
+				b.Fatal(err)
+			}
+			var twmbNative any
+			if _, err := twmbSchema.Decode(c.Payload, &twmbNative); err != nil {
+				b.Fatal(err)
+			}
+
 			for _, codecName := range ocfCodecs {
 				b.Run(codecName, func(b *testing.B) {
-					b.Run("hamba", func(b *testing.B) {
-						container, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							dec, err := hambaocf.NewDecoder(bytes.NewReader(container))
+					b.Run("typed", func(b *testing.B) {
+						b.Run("hamba", func(b *testing.B) {
+							container, err := buildHambaOCF(hambaSchema, c.Value, codecName, ocfRecords)
 							if err != nil {
 								b.Fatal(err)
 							}
-							for dec.HasNext() {
-								if err := dec.Decode(c.NewTyped()); err != nil {
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								dec, err := hambaocf.NewDecoder(bytes.NewReader(container))
+								if err != nil {
 									b.Fatal(err)
 								}
-							}
-							if err := dec.Error(); err != nil {
-								b.Fatal(err)
-							}
-						}
-					})
-
-					b.Run("iskorotkov", func(b *testing.B) {
-						container, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							dec, err := iskoocf.NewDecoder(bytes.NewReader(container))
-							if err != nil {
-								b.Fatal(err)
-							}
-							for dec.HasNext() {
-								if err := dec.Decode(c.NewTyped()); err != nil {
-									b.Fatal(err)
-								}
-							}
-							if err := dec.Error(); err != nil {
-								b.Fatal(err)
-							}
-						}
-					})
-
-					b.Run("twmb", func(b *testing.B) {
-						container, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							r, err := twmbocf.NewReader(bytes.NewReader(container))
-							if err != nil {
-								b.Fatal(err)
-							}
-							for {
-								if err := r.Decode(c.NewTyped()); err != nil {
-									if errors.Is(err, io.EOF) {
-										break
+								for dec.HasNext() {
+									if err := dec.Decode(c.NewTyped()); err != nil {
+										b.Fatal(err)
 									}
+								}
+								if err := dec.Error(); err != nil {
 									b.Fatal(err)
 								}
 							}
-						}
-					})
+						})
 
-					b.Run("goavro", func(b *testing.B) {
-						container, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords)
-						if err != nil {
-							b.Fatal(err)
-						}
-						b.SetBytes(int64(len(container)))
-						b.ReportAllocs()
-						b.ResetTimer()
-						for i := 0; i < b.N; i++ {
-							r, err := goavro.NewOCFReader(bytes.NewReader(container))
+						b.Run("iskorotkov", func(b *testing.B) {
+							container, err := buildIskoOCF(iskoSchema, c.Value, codecName, ocfRecords)
 							if err != nil {
 								b.Fatal(err)
 							}
-							for r.Scan() {
-								if _, err := r.Read(); err != nil {
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								dec, err := iskoocf.NewDecoder(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for dec.HasNext() {
+									if err := dec.Decode(c.NewTyped()); err != nil {
+										b.Fatal(err)
+									}
+								}
+								if err := dec.Error(); err != nil {
 									b.Fatal(err)
 								}
 							}
-							if err := r.Err(); err != nil {
+						})
+
+						b.Run("twmb", func(b *testing.B) {
+							container, err := buildTwmbOCF(twmbSchema, c.Value, codecName, ocfRecords)
+							if err != nil {
 								b.Fatal(err)
 							}
-						}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								r, err := twmbocf.NewReader(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for {
+									if err := r.Decode(c.NewTyped()); err != nil {
+										if errors.Is(err, io.EOF) {
+											break
+										}
+										b.Fatal(err)
+									}
+								}
+							}
+						})
+
+						b.Run("goavro", func(b *testing.B) {
+							b.Skipf("goavro has no typed struct mode; see the dynamic arm")
+						})
+					})
+
+					b.Run("dynamic", func(b *testing.B) {
+						b.Run("hamba", func(b *testing.B) {
+							container, err := buildHambaOCF(hambaSchema, hambaNative, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								dec, err := hambaocf.NewDecoder(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for dec.HasNext() {
+									var out any
+									if err := dec.Decode(&out); err != nil {
+										b.Fatal(err)
+									}
+								}
+								if err := dec.Error(); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("iskorotkov", func(b *testing.B) {
+							container, err := buildIskoOCF(iskoSchema, iskoNative, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								dec, err := iskoocf.NewDecoder(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for dec.HasNext() {
+									var out any
+									if err := dec.Decode(&out); err != nil {
+										b.Fatal(err)
+									}
+								}
+								if err := dec.Error(); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+
+						b.Run("twmb", func(b *testing.B) {
+							container, err := buildTwmbOCF(twmbSchema, twmbNative, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								r, err := twmbocf.NewReader(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for {
+									var out any
+									if err := r.Decode(&out); err != nil {
+										if errors.Is(err, io.EOF) {
+											break
+										}
+										b.Fatal(err)
+									}
+								}
+							}
+						})
+
+						b.Run("goavro", func(b *testing.B) {
+							container, err := buildGoavroOCF(c.SchemaJSON, goavroNative, codecName, ocfRecords)
+							if err != nil {
+								b.Fatal(err)
+							}
+							b.SetBytes(int64(len(container)))
+							b.ReportAllocs()
+							b.ResetTimer()
+							for i := 0; i < b.N; i++ {
+								r, err := goavro.NewOCFReader(bytes.NewReader(container))
+								if err != nil {
+									b.Fatal(err)
+								}
+								for r.Scan() {
+									if _, err := r.Read(); err != nil {
+										b.Fatal(err)
+									}
+								}
+								if err := r.Err(); err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
 					})
 				})
 			}

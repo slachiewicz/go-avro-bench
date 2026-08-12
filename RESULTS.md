@@ -6,12 +6,83 @@ Regenerate with `make bench && make stat`.
 Library versions are branch tips, not tags — which turns out to matter, see
 below. hamba is pinned at v2.31.0 because that is its final release.
 
-> **Partial.** The end-to-end pipeline, encoding and OCF families are still
-> running and are not reported yet. A single `-count=10` sweep of the whole
-> suite was killed by the machine partway through `EncodingDecode`, so the
-> families below come from that sweep's completed portion and the rest are being
-> collected in separate chunks. Nothing is mixed across code changes: the tree
-> has not moved since.
+Collected in five processes rather than one sweep, all from the same tree.
+434 benchmark arms, 4,340 timed runs, roughly 2.7 billion iterations.
+
+## The path Bento actually runs
+
+`schema_registry_decode` is two stages, not one: `NativeFromBinary` then
+`TextualFromNative` (`serde_avro.go:198-203`). Measuring only the first, as the
+tables further down do, gets the ranking wrong — the second stage is the larger
+part of the cost.
+
+`DecodeStage`, goavro, `flat`: native **334.9n**, textual **1.148µ**. The stage
+this file used to omit is 77% of the work.
+
+### End to end, Confluent-framed binary in, JSON bytes out
+
+| Schema | twmb | goavro-plain | goavro-stdjson | hamba | iskorotkov |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| flat | **1.056µ** | 1.433µ | 1.494µ | 2.244µ | 2.322µ |
+| nested | **3.124µ** | 4.760µ | 4.766µ | 6.539µ | 6.549µ |
+| union | **2.940µ** ±19% | 3.800µ | 3.497µ | 3.865µ | 3.832µ |
+| wide | **6.582µ** | 11.02µ | 10.07µ | 11.27µ | 11.35µ |
+
+twmb wins every case, by 1.36× to 1.71× over the better goavro mode. On
+allocations the gap is wider: `wide` costs twmb **50** against goavro's 137-158
+and hamba's 169.
+
+That reverses what the single-stage numbers say, where goavro leads on `flat`
+and `nested`. Both are correct measurements of different things; only one of
+them is the thing a pipeline pays.
+
+### Encoding, JSON bytes in, framed binary out
+
+| Schema | twmb-bare | twmb-wrapped | goavro-plain | goavro-stdjson |
+| --- | ---: | ---: | ---: | ---: |
+| flat | 1.677µ | 1.512µ | 1.385µ | **1.372µ** |
+| nested | 4.954µ | **4.391µ** | 4.450µ | 4.568µ |
+| union | **3.322µ** | 4.020µ | 3.864µ | 5.640µ |
+| wide | **10.04µ** | 15.88µ | 13.53µ | **31.37µ** |
+
+`bare` and `wrapped` are the two JSON dialects: bare values against goavro's
+tagged-union envelope. Each is paired with the goavro mode that speaks the same
+dialect.
+
+goavro's std-JSON mode costs **31.37µ on `wide`, 2.3× its own plain mode**
+(±4% against ±1%, so not noise). Union-heavy records are exactly where that mode
+gets chosen.
+
+### What the coercion walker costs
+
+hamba and iskorotkov cannot encode a `json.Unmarshal` value at all, so those
+arms are absent above. With the 220-line walker from
+[CAPABILITIES.md](CAPABILITIES.md) in front of them:
+
+| Schema | hamba | iskorotkov | twmb-bare (no walker) |
+| --- | ---: | ---: | ---: |
+| nested | 9.105µ | 8.373µ | **4.905µ** |
+| union | 5.281µ | 5.258µ | **3.580µ** |
+| wide | 16.60µ | 16.54µ | **9.734µ** |
+
+Shimmed, they lose to unshimmed twmb by 1.7-1.9×. The walker does not buy back
+the gap; it only makes the comparison possible.
+
+## Object container files
+
+The one family where all four libraries support everything — null, deflate and
+snappy, no skips. `OCFWrite`, 1000 records, deflate:
+
+| | hamba | iskorotkov | twmb | goavro |
+| --- | ---: | ---: | ---: | ---: |
+| flat, typed | 756.1µ | 767.1µ | **234.4µ** | n/a |
+| flat, dynamic | 1.349m | 1.329m | 357.3µ | **303.4µ** |
+| nested, typed | 1.006m | 1.011m | **478.9µ** | n/a |
+| nested, dynamic | 2.748m | 2.884m | 792.7µ | **640.3µ** |
+
+twmb is 3.2× faster than hamba writing typed, and hamba is 3.8× behind twmb
+writing dynamic. goavro leads the dynamic column, having no typed mode to offer.
+
 
 ## Library version is worth as much as library choice
 
@@ -127,12 +198,8 @@ twmb allocates least: 190 against goavro's 271 and hamba's 621.
 Parsing costs roughly 20–70× a single decode either way, so whether a pipeline
 caches a codec per schema matters more than which codec it caches.
 
-## Still to report
+## What decides it is not in this file
 
-End-to-end `SRDecode`/`SREncode` through both goavro codec modes, the three wire
-encodings, OCF containers, and the Pulsar cached-codec pattern — the families
-that measure real pipeline paths rather than a single decode.
-
-The capability findings in [CAPABILITIES.md](CAPABILITIES.md) already decide
-more than any of these timings: two of the three replacement candidates cannot
-implement Bento's existing paths at all.
+Two of the three replacement candidates cannot implement Bento's existing paths
+at all: hamba and iskorotkov ship no Avro textual codec, which four call sites
+need. See [CAPABILITIES.md](CAPABILITIES.md). No timing here outranks that.

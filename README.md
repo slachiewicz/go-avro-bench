@@ -1,5 +1,13 @@
 # go-avro-bench
 
+> **Work in progress — a proof of concept, not official results.**
+>
+> A working draft, published so the method can be argued with. The harness is
+> young, the numbers come from one laptop under load, several families are still
+> being collected, and conclusions have already been overturned twice during
+> the writing. Do not cite anything here as settled. If a number matters to you,
+> re-run it: `make bench && make stat`.
+
 Comparing Go Avro codecs on equal terms, to pick one deliberately.
 
 Companion to [ANALYSIS.md](ANALYSIS.md), which covers who depends on which

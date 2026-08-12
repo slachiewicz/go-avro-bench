@@ -2,6 +2,7 @@ package avrobench
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -77,9 +78,11 @@ func summarise(v any) string {
 	}
 }
 
-// TestRoundTripTyped asserts every struct-mode codec reproduces the fixture
-// bytes from the fixture value, so the decode benchmarks are all reading a
-// payload each of them agrees is valid.
+// TestRoundTripTyped re-encodes the fixture value with each struct-mode codec
+// and checks the result decodes back to the same value. Byte equality is the
+// wrong assertion: Avro leaves the block byte-count optional on arrays and maps,
+// so two spec-valid encoders disagree on length, and Go map iteration order
+// makes map blocks non-deterministic within one encoder.
 func TestRoundTripTyped(t *testing.T) {
 	for _, c := range Cases {
 		t.Run(c.Name, func(t *testing.T) {
@@ -88,14 +91,28 @@ func TestRoundTripTyped(t *testing.T) {
 				"iskorotkov": func() ([]byte, error) { return isko.Marshal(isko.MustParse(c.SchemaJSON), c.Value) },
 				"twmb":       func() ([]byte, error) { return twmb.MustParse(c.SchemaJSON).Encode(c.Value) },
 			}
-			for lib, fn := range enc {
-				b, err := fn()
+			names := make([]string, 0, len(enc))
+			for lib := range enc {
+				names = append(names, lib)
+			}
+			sort.Strings(names)
+
+			for _, lib := range names {
+				b, err := enc[lib]()
 				if err != nil {
 					t.Errorf("%s encode: %v", lib, err)
 					continue
 				}
-				if string(b) != string(c.Payload) {
-					t.Errorf("%s: encoding differs from fixture (%d vs %d bytes)", lib, len(b), len(c.Payload))
+				if len(b) != len(c.Payload) {
+					t.Logf("%s: %d bytes against the fixture's %d — optional array/map block size", lib, len(b), len(c.Payload))
+				}
+				got := c.NewTyped()
+				if err := hamba.Unmarshal(hamba.MustParse(c.SchemaJSON), b, got); err != nil {
+					t.Errorf("%s: output does not decode: %v", lib, err)
+					continue
+				}
+				if !reflect.DeepEqual(got, c.Value) {
+					t.Errorf("%s: round trip changed the value\n got %+v\nwant %+v", lib, got, c.Value)
 				}
 			}
 		})

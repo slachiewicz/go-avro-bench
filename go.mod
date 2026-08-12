@@ -4,9 +4,9 @@ go 1.26.5
 
 require (
 	github.com/hamba/avro/v2 v2.31.0
-	github.com/iskorotkov/avro/v2 v2.33.1
-	github.com/linkedin/goavro/v2 v2.15.0
-	github.com/twmb/avro v1.7.2
+	github.com/iskorotkov/avro/v2 v2.33.2-0.20260610201905-972eeffc8519
+	github.com/linkedin/goavro/v2 v2.15.1-0.20260121182511-c69e26ce4676
+	github.com/twmb/avro v1.7.3-0.20260811190909-81123696cf39
 )
 
 require (

@@ -35,9 +35,13 @@ func stripConfluentHeader(b []byte) (uint32, []byte) {
 }
 
 // BenchmarkSRDecode is the full decode path: Confluent-framed binary in, JSON
-// bytes out. goavro does this with one codec built either way; the other
-// libraries have no schema-aware JSON encoder, so they decode into `any` and
-// fall back to encoding/json — the comparison this benchmark exists to show.
+// bytes out. goavro and twmb both have a schema-aware textual encoder
+// (TextualFromNative / EncodeJSON) and use it here, TaggedUnions on the twmb
+// side to match goavro's wrapped-union dialect. hamba and iskorotkov have no
+// such encoder at all — Marshal/Unmarshal only ever produce binary — so those
+// two fall back to decode-into-`any` plus encoding/json.Marshal because
+// nothing else is available to them, not because this harness chose to
+// simplify.
 func BenchmarkSRDecode(b *testing.B) {
 	for _, c := range Cases {
 		framed := ConfluentFrame(schemaRegistryID, c.Payload)
@@ -125,7 +129,7 @@ func BenchmarkSRDecode(b *testing.B) {
 					if _, err := schemas[id].Decode(payload, &out); err != nil {
 						b.Fatal(err)
 					}
-					if _, err := json.Marshal(out); err != nil {
+					if _, err := schemas[id].EncodeJSON(out, twmb.TaggedUnions()); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -138,8 +142,13 @@ func BenchmarkSRDecode(b *testing.B) {
 // Confluent-framed binary out. The two goavro arms need JSON shaped for their
 // own codec (wrapped unions for NewCodec, bare values for
 // NewCodecForStandardJSONFull), so each builds its own input once, outside the
-// timer, from the same fixture payload. hamba, iskorotkov and twmb all receive
-// the bare-value form, since none of them understand goavro's union envelope.
+// timer, from the same fixture payload. hamba and iskorotkov have no textual
+// codec at all and receive the bare-value form because that's what their
+// generic decode-into-any + encoding/json.Marshal path in BenchmarkSRDecode
+// would hand a pipeline. twmb gets both dialects as separate arms — bare via
+// json.Unmarshal + Encode, wrapped via DecodeJSON(..., TaggedUnions) — so it
+// is compared against goavro-stdjson and goavro-plain on like-for-like input
+// rather than only ever running the dialect that happens to suit it.
 func BenchmarkSREncode(b *testing.B) {
 	for _, c := range Cases {
 		plainCodec, err := goavro.NewCodecForStandardJSONFull(c.SchemaJSON)
@@ -253,13 +262,34 @@ func BenchmarkSREncode(b *testing.B) {
 				}
 			})
 
-			b.Run("twmb", func(b *testing.B) {
+			b.Run("twmb-bare", func(b *testing.B) {
 				schemas := map[uint32]*twmb.Schema{schemaRegistryID: twmb.MustParse(c.SchemaJSON)}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					var v any
 					if err := json.Unmarshal(plainJSON, &v); err != nil {
+						b.Fatal(err)
+					}
+					datum, err := schemas[schemaRegistryID].Encode(v)
+					if err != nil {
+						b.Fatal(err)
+					}
+					_ = ConfluentFrame(schemaRegistryID, datum)
+				}
+			})
+
+			// twmb-wrapped is the like-for-like pairing against goavro-plain:
+			// both parse the wrapped-union dialect, so this is the arm that
+			// answers "if a Bloblang mapping targets the NewCodec convention,
+			// what does twmb cost instead" rather than comparing across dialects.
+			b.Run("twmb-wrapped", func(b *testing.B) {
+				schemas := map[uint32]*twmb.Schema{schemaRegistryID: twmb.MustParse(c.SchemaJSON)}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					var v any
+					if err := schemas[schemaRegistryID].DecodeJSON(wrappedJSON, &v, twmb.TaggedUnions()); err != nil {
 						b.Fatal(err)
 					}
 					datum, err := schemas[schemaRegistryID].Encode(v)
@@ -509,11 +539,12 @@ func coerceIsko(s isko.Schema, v any) (any, error) {
 
 // BenchmarkSREncodeCoerced is BenchmarkSREncode's hamba/iskorotkov arms with
 // coerceHamba/coerceIsko run inside the timed loop instead of skipping, plus
-// twmb unchanged as a control: twmb needs no shim, so its arm shows what the
-// shim costs relative to a codec that was never going to pay it. Comparing
-// this against BenchmarkSREncode's twmb numbers quantifies the shim itself;
-// comparing hamba/iskorotkov here against twmb here answers the migration
-// question directly.
+// twmb unchanged as a control (both dialects, as in BenchmarkSREncode): twmb
+// needs no shim, so its arms show what the shim costs relative to a codec
+// that was never going to pay it. Comparing this against BenchmarkSREncode's
+// twmb numbers quantifies the shim itself; comparing hamba/iskorotkov here
+// against twmb-bare/twmb-wrapped here answers the migration question
+// directly.
 func BenchmarkSREncodeCoerced(b *testing.B) {
 	for _, c := range Cases {
 		plainCodec, err := goavro.NewCodecForStandardJSONFull(c.SchemaJSON)
@@ -525,6 +556,19 @@ func BenchmarkSREncodeCoerced(b *testing.B) {
 			b.Fatal(err)
 		}
 		plainJSON, err := plainCodec.TextualFromNative(nil, native)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		wrappedCodec, err := goavro.NewCodec(c.SchemaJSON)
+		if err != nil {
+			b.Fatal(err)
+		}
+		wrappedNative, _, err := wrappedCodec.NativeFromBinary(c.Payload)
+		if err != nil {
+			b.Fatal(err)
+		}
+		wrappedJSON, err := wrappedCodec.TextualFromNative(nil, wrappedNative)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -596,13 +640,30 @@ func BenchmarkSREncodeCoerced(b *testing.B) {
 				}
 			})
 
-			b.Run("twmb", func(b *testing.B) {
+			b.Run("twmb-bare", func(b *testing.B) {
 				schemas := map[uint32]*twmb.Schema{schemaRegistryID: twmb.MustParse(c.SchemaJSON)}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					var v any
 					if err := json.Unmarshal(plainJSON, &v); err != nil {
+						b.Fatal(err)
+					}
+					datum, err := schemas[schemaRegistryID].Encode(v)
+					if err != nil {
+						b.Fatal(err)
+					}
+					_ = ConfluentFrame(schemaRegistryID, datum)
+				}
+			})
+
+			b.Run("twmb-wrapped", func(b *testing.B) {
+				schemas := map[uint32]*twmb.Schema{schemaRegistryID: twmb.MustParse(c.SchemaJSON)}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					var v any
+					if err := schemas[schemaRegistryID].DecodeJSON(wrappedJSON, &v, twmb.TaggedUnions()); err != nil {
 						b.Fatal(err)
 					}
 					datum, err := schemas[schemaRegistryID].Encode(v)

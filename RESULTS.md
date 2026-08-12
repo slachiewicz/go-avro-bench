@@ -1,114 +1,138 @@
 # Results
 
-> **Superseded in part.** Everything below measures one stage — binary to an
-> untyped value. Bento's actual path is two stages, binary to native to JSON
-> bytes, and measuring the whole path reverses the ranking. See
-> [CAPABILITIES.md](CAPABILITIES.md) for what each codec can and cannot do,
-> which decides more than any timing here. Full rewrite pending the current run.
-
 `go1.26.5 darwin/arm64`, Apple M1, `-count=10`, `benchstat -col /lib`.
 Regenerate with `make bench && make stat`.
 
-## The headline: for dynamic decoding, goavro is not the slow one
+Library versions are branch tips, not tags — which turns out to matter, see
+below. hamba is pinned at v2.31.0 because that is its final release.
 
-`sec/op`, decoding into an untyped destination — the mode a schema-driven
-pipeline runs in.
+> **Partial.** The end-to-end pipeline, encoding and OCF families are still
+> running and are not reported yet. A single `-count=10` sweep of the whole
+> suite was killed by the machine partway through `EncodingDecode`, so the
+> families below come from that sweep's completed portion and the rest are being
+> collected in separate chunks. Nothing is mixed across code changes: the tree
+> has not moved since.
+
+## Library version is worth as much as library choice
+
+The same `twmb/avro` code path, tag `v1.7.2` against main
+(`v1.7.3-0.20260811190909`), everything else identical:
+
+| | v1.7.2 | main | |
+| --- | ---: | ---: | --- |
+| DecodeDynamic flat | 495.6n | **371.5n** | −25% |
+| DecodeDynamic nested | 1.663µ | **1.080µ** | −35% |
+| DecodeDynamic union | 1.209µ | **983.2n** | −19% |
+| Parse flat | 33.50µ | **14.01µ** | −58% |
+| Parse flat allocs | 336 | **190** | −43% |
+
+twmb has not cut a tag since 2026-04-30 while developing steadily, so anyone
+benchmarking it from its latest release is measuring something materially slower
+than its main. `redpanda-data/connect` pins an untagged commit.
+
+hamba, iskorotkov and goavro reproduced within a few percent across those two
+runs, so this is the library moving, not the harness.
+
+## Dynamic decode — the mode a schema-driven pipeline runs in
+
+`sec/op`:
 
 | Schema | goavro | twmb | hamba | iskorotkov |
 | --- | ---: | ---: | ---: | ---: |
-| flat | **265.2n** | 495.6n | 807.4n | 807.1n |
-| nested | **940.5n** | 1.663µ | 2.459µ | 2.445µ |
-| union | 1.259µ | **1.209µ** | 1.602µ | 1.588µ |
+| flat | **254.1n** | 371.5n | 827.8n | 842.7n |
+| nested | **915.0n** | 1.080µ | 2.457µ | 2.479µ |
+| union | 1.238µ | **983.2n** | 1.597µ | 1.611µ |
+| wide | 3.625µ | **2.707µ** | 3.961µ | 4.035µ |
 
-goavro is 3.0× faster than hamba on `flat` and 2.6× faster on `nested`, and
-loses to twmb by 4% on `union`. The circulating claim that hamba beats goavro by
-3.6× **inverts** once both are asked to produce the same output shape.
+`allocs/op`:
 
-Allocation follows the same order except on unions:
+| Schema | goavro | twmb | hamba | iskorotkov |
+| --- | ---: | ---: | ---: | ---: |
+| flat | **10** | 11 | 19 | 19 |
+| nested | 35 | **29** | 60 | 60 |
+| union | 49 | **22** | 34 | 34 |
+| wide | 82 | **22** | 79 | 79 |
 
-| Schema | goavro | twmb | hamba |
+The split is by schema shape, not by library quality. goavro wins on plain
+scalars and nested records. twmb wins as soon as unions appear, and the margin
+grows with field count: on `wide` — 44 fields, mostly nullable unions, the shape
+Confluent schema-registry traffic takes — twmb is 1.34× faster on **a quarter of
+the allocations**.
+
+goavro's cost there is structural. It wraps every non-null union branch in a
+single-key map, so each such field costs an extra allocation.
+
+hamba and iskorotkov are the slowest dynamic decoders in every case. Their
+reputation comes from the typed path below.
+
+## Typed decode
+
+| Schema | hamba | iskorotkov | twmb |
 | --- | ---: | ---: | ---: |
-| flat | **10** allocs / 448 B | 11 / 465 B | 19 / 585 B |
-| nested | 35 / 1.648 Ki | **32** / 1.640 Ki | 60 / 1.991 Ki |
-| union | 49 / 2.352 Ki | **24** / 1.111 Ki | 34 / 1.241 Ki |
+| flat | 123.9n | 112.8n | **112.0n** |
+| nested | 340.5n | **309.8n** | 376.9n |
+| union | 656.0n | **548.8n** | 670.5n |
+| wide | 1.720µ | 890.5n | **823.3n** |
 
-## Where goavro genuinely loses: unions
+goavro cannot appear: it has no struct mode. A capability difference, reported
+as one rather than folded into a ranking.
 
-`2.352 KiB / 49 allocs` against twmb's `1.111 KiB / 24 allocs` — roughly double
-the memory. That is the single-key wrapper map goavro builds per non-null union
-field (`{"string": "u-99213"}`), allocated per field per message.
+**The fork is not just hamba plus a CVE fix.** iskorotkov is 1.93× faster than
+hamba on `wide` typed decode (890.5n against 1.720µ) at identical allocations,
+and ahead on nested and union too. Whatever it has changed since forking is
+worth more than the vulnerability patch it was made for.
 
-Confluent schema-registry traffic is union-heavy, so this is the one place a
-migration pays. It is also exactly the place where the change is visible to
-users, since that wrapper is the shape Bloblang mappings are written against.
+## Typed versus dynamic is the bigger axis
 
-## The axis that actually matters is typed versus dynamic
-
-Same library, same payload, `nested`:
+Same library, same payload, `wide`:
 
 | | hamba | twmb |
 | --- | ---: | ---: |
-| dynamic | 2.459µ | 1.663µ |
-| typed | 333.6n | 350.1n |
-| ratio | **7.4×** | **4.7×** |
+| dynamic | 3.961µ | 2.707µ |
+| typed | 1.720µ | 823.3n |
+| ratio | 2.3× | **3.3×** |
 
-Choosing a codec moves the number far less than choosing whether the schema is
-known at build time. Bento cannot make that choice — schemas arrive at runtime
-from a registry or config — so it is stuck on the slow side of a 5–7× gap no
-library shopping will close.
+Choosing a codec moves the number less than choosing whether the schema is known
+at build time. A pipeline taking schemas at runtime sits on the slow side of that
+gap whatever it depends on.
 
-This is also why the published comparison misleads: it measures hamba's typed
-path against goavro's dynamic one and reports a single ranking.
+This is also how the widely-circulated comparison misleads: it measures hamba's
+typed path against goavro's dynamic one and reports a single ranking.
 
-## The reuse artefact, quantified
+## The reuse artefact
 
 `DecodeTypedReused` keeps one destination across `b.N`, as
 `nrwiersma/avro-benchmarks` does. `DecodeTyped` allocates per iteration.
 
-| Case | reused | fresh | understated by |
+| Case | reused | fresh | understated |
 | --- | ---: | ---: | ---: |
-| hamba nested | 222.6n, **0 allocs** | 333.6n, 5 allocs | 33% |
-| hamba union | 444.4n, 3 allocs | 644.1n, 11 allocs | 31% |
-| twmb nested | 179.2n, **0 allocs** | 350.1n, 5 allocs | 49% |
+| hamba wide | 1.300µ, **0 allocs** | 1.720µ, 21 allocs | 24% |
+| twmb wide | 410.9n, **0 allocs** | 823.3n, 21 allocs | **50%** |
+| hamba nested | 236.1n, **0 allocs** | 340.5n, 5 allocs | 31% |
+| twmb nested | 211.6n, **0 allocs** | 376.9n, 5 allocs | 44% |
 
-Reuse reports **zero allocations per decode** for `flat` and `nested`. The
-result allocation does not disappear in production; it is only moved outside the
-measurement.
+Reuse reports **zero allocations per decode**. The result allocation has not
+gone anywhere; it has moved outside the measurement. On `wide` it halves twmb's
+apparent cost.
 
 ## Schema compilation
 
-`Parse`, per call. Relevant only to pipelines that do not cache a codec per
-schema.
-
-| Schema | goavro | hamba | twmb |
+| Schema | goavro | twmb | hamba |
 | --- | ---: | ---: | ---: |
-| flat | **11.79µ** | 32.22µ | 33.50µ |
-| nested | **20.97µ** | 53.54µ | 75.80µ |
-| union | **21.94µ** | 47.37µ | 71.33µ |
+| flat | **12.23µ** | 14.01µ | 34.29µ |
 
-goavro compiles 2–3× faster. Parsing costs 20–70× a single decode, so a codec
-cache matters more than any decode difference measured here.
+goavro and twmb are close now — on its previous tag twmb was 2.4× behind here.
+twmb allocates least: 190 against goavro's 271 and hamba's 621.
 
-## iskorotkov versus hamba
+Parsing costs roughly 20–70× a single decode either way, so whether a pipeline
+caches a codec per schema matters more than which codec it caches.
 
-Indistinguishable, as a fork should be: within noise everywhere except a small
-typed-decode edge on `nested` (304.8n against 333.6n). The GO-2026-5048 fix
-costs nothing.
+## Still to report
 
-## What this means for Bento
+End-to-end `SRDecode`/`SREncode` through both goavro codec modes, the three wire
+encodings, OCF containers, and the Pulsar cached-codec pattern — the families
+that measure real pipeline paths rather than a single decode.
 
-The performance case for moving Bento's Avro components off goavro is **weak**.
-Bento decodes dynamically, and goavro wins or ties there on everything except
-union memory.
-
-The real arguments for `twmb/avro` are elsewhere: roughly half the memory on
-union-heavy payloads, one maintained library instead of one maintained and one
-archived, and alignment with `redpanda-data/connect`, which made this exact
-migration in [#4195](https://github.com/redpanda-data/connect/pull/4195) and
-deleted its 571-line normalisation walker doing so.
-
-Set against that: the union representation change breaks user Bloblang mappings.
-The decimal and fixed breaks connect's PR documents are not library properties —
-probing all four shows decimals decode to `*big.Rat` everywhere and the `fixed`
-split falls on the fork line; those breaks came from connect's own JSON layer.
-See [CAPABILITIES.md](CAPABILITIES.md).
+The capability findings in [CAPABILITIES.md](CAPABILITIES.md) already decide
+more than any of these timings: two of the three replacement candidates cannot
+implement Bento's existing paths at all.

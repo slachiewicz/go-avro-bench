@@ -19,8 +19,16 @@ reference implementation" is not available as a tie-breaker.
 | `heetch/avro` | 95 | 2025-06-20 | Low activity. Code generation plus schema-registry support. |
 | `go-avro/avro` | 55 | 2022-05-17 | Dead. |
 | `khezen/avro` | 49 | 2024-11-27 | Dormant. |
-| `twmb/avro` | 29 | 2026-08-11 | Active. By the `franz-go` author. Single dependency: `klauspost/compress`. |
+| `twmb/avro` | 29 | 2026-08-11 | Active. By the `franz-go` author. Single dependency: `klauspost/compress`. Last tag 2026-04-30. |
 | `iskorotkov/avro/v2` | 16 | 2026-07-29 | Fork of `hamba/avro`, carries the GO-2026-5048 fix. |
+
+Two things about `twmb/avro` that the table cannot show. It has not cut a tag
+since 2026-04-30 despite steady development, and the gap is not cosmetic: main
+is 25-35% faster than `v1.7.2` at dynamic decode and 58% faster to parse
+([RESULTS.md](RESULTS.md)). Adopting it means pinning an untagged commit, which
+is what `redpanda-data/connect` does. And it is one maintainer at 29 stars —
+against `hamba`'s 509 at the point it was archived, which is a reminder that
+stars did not keep that one alive either.
 
 ## The archive event and what followed
 
@@ -132,8 +140,7 @@ no Pulsar dependency at all — those connectors live in `redpanda-data/connect`
 Upstream has no `hamba` dependency and therefore no archived-library exposure.
 
 Bento's Avro problem follows directly from keeping in-tree the connectors
-upstream moved out. Worth knowing before treating it as something upstream
-solved and Bento missed.
+upstream moved out. It is not something upstream solved and Bento missed.
 
 Bento is also behind on the shared one: `goavro` v2.12.0 against upstream's
 v2.15.0.

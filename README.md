@@ -80,7 +80,13 @@ Report the Go version and machine alongside any numbers. These are allocation
 and latency measurements on one box; `allocs/op` is stable and comparable,
 `ns/op` needs a quiet machine before it means anything.
 
-## Status
+## Results
 
-Harness and analysis complete; results not yet interpreted here. `bench.txt` is
-generated, not committed.
+[RESULTS.md](RESULTS.md). The short version: for dynamic decoding — the mode a
+schema-driven pipeline runs in — goavro is 3.0× faster than hamba on primitives
+and 2.6× on nested records, losing only on unions, where it allocates about
+twice as much. The published ranking inverts once both codecs are asked for the
+same output shape, because it compares hamba's typed path against goavro's
+dynamic one.
+
+`bench.txt` is generated, not committed.

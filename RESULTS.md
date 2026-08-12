@@ -31,7 +31,7 @@ this file used to omit is 78% of the work.
 | wide | **6.046µ** | 10.17µ | 9.350µ | 10.48µ | 10.57µ |
 
 twmb wins every case, by 1.22× to 1.55× over whichever goavro mode is faster,
-and by 1.73× to 2.05× over hamba. On allocations the gap is wider: `wide` costs
+and by 1.37× to 2.09× over hamba. On allocations the gap is wider: `wide` costs
 twmb **50** against goavro's 137-158 and hamba's 169.
 
 That reverses what the single-stage numbers say, where goavro leads on `flat`
@@ -47,8 +47,8 @@ them is the thing a pipeline pays.
 | union | **2.845µ** | 3.308µ | 3.283µ | 4.645µ |
 | wide | **8.061µ** | 11.94µ | 11.46µ | 25.21µ |
 
-goavro leads `flat`; `nested` is a three-way tie inside a 4% spread. twmb leads
-`union` and `wide` outright. Encoding is the one direction where goavro is
+goavro leads `flat`. On `nested` twmb-wrapped is ahead by 3%, which is outside
+the intervals but too narrow to lean on. twmb leads `union` and `wide` outright. Encoding is the one direction where goavro is
 genuinely competitive.
 
 `bare` and `wrapped` are the two JSON dialects: bare values against goavro's
@@ -84,15 +84,18 @@ snappy, no skips. `OCFWrite`, 1000 records, deflate:
 | | hamba | iskorotkov | twmb | goavro |
 | --- | ---: | ---: | ---: | ---: |
 | flat, typed | 756.1µ | 767.1µ | **234.4µ** | n/a |
-| flat, dynamic | 1.349m | 1.329m | 357.3µ | **303.4µ** |
 | nested, typed | 1.006m | 1.011m | **478.9µ** | n/a |
+| union, typed | 1.340m | 1.360m | **671.0µ** | n/a |
+| wide, typed | 1.408m | 1.497m | **871.2µ** | n/a |
+| flat, dynamic | 1.349m | 1.329m | 357.3µ | **303.4µ** |
 | nested, dynamic | 2.748m | 2.884m | 792.7µ | **640.3µ** |
 | union, dynamic | 2.415m | 2.453m | 968.5µ | **855.2µ** |
 | wide, dynamic | 5.942m | 5.801m | **1.806m** | 2.507m |
 
-twmb is 3.2× faster than hamba writing typed, and hamba is 3.8× behind twmb
-writing dynamic. goavro leads the dynamic column on every shape except `wide`,
-where twmb takes it back by 1.39×. goavro has no typed mode to offer.
+Against hamba, twmb writes typed 3.2× faster on `flat` but only 1.6-2.1× on the
+other shapes, and dynamic 2.5-3.8× faster depending on shape. goavro leads the
+dynamic column everywhere except `wide`, where twmb takes it back by 1.39×.
+goavro has no typed mode to offer.
 
 
 ## Library version is worth as much as library choice

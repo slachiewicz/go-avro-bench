@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "Logical",
+  "namespace": "bench.parity",
+  "fields": [
+    {"name": "ts_millis", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "ts_micros", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+    {"name": "day", "type": {"type": "int", "logicalType": "date"}},
+    {"name": "tod_millis", "type": {"type": "int", "logicalType": "time-millis"}},
+    {"name": "id", "type": {"type": "string", "logicalType": "uuid"}},
+    {"name": "amount", "type": {"type": "bytes", "logicalType": "decimal", "precision": 8, "scale": 2}},
+    {"name": "amount_fixed", "type": {"type": "fixed", "name": "AmountFixed", "size": 4, "logicalType": "decimal", "precision": 8, "scale": 2}},
+    {"name": "raw_fixed", "type": {"type": "fixed", "name": "RawFixed", "size": 4}},
+    {"name": "status", "type": {"type": "enum", "name": "Status", "symbols": ["ACTIVE", "INACTIVE", "PENDING"]}}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "Evo",
+  "namespace": "bench.evo",
+  "fields": [
+    {"name": "id", "type": "long"},
+    {"name": "name", "type": "string"},
+    {"name": "email", "type": "string", "default": "unknown@example.com"}
+  ]
+}

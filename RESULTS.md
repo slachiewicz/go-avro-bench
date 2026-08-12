@@ -1,5 +1,11 @@
 # Results
 
+> **Superseded in part.** Everything below measures one stage — binary to an
+> untyped value. Bento's actual path is two stages, binary to native to JSON
+> bytes, and measuring the whole path reverses the ranking. See
+> [CAPABILITIES.md](CAPABILITIES.md) for what each codec can and cannot do,
+> which decides more than any timing here. Full rewrite pending the current run.
+
 `go1.26.5 darwin/arm64`, Apple M1, `-count=10`, `benchstat -col /lib`.
 Regenerate with `make bench && make stat`.
 

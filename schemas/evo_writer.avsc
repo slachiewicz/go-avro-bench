@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "Evo",
+  "namespace": "bench.evo",
+  "fields": [
+    {"name": "id", "type": "int"},
+    {"name": "name", "type": "string"},
+    {"name": "legacy_flag", "type": "boolean"}
+  ]
+}

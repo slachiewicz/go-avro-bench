@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "Company",
+  "namespace": "bench.refs",
+  "fields": [
+    {"name": "hq", "type": {
+      "type": "record",
+      "name": "Address",
+      "fields": [
+        {"name": "city", "type": "string"},
+        {"name": "zip", "type": "string"}
+      ]
+    }},
+    {"name": "branch", "type": "bench.refs.Address"}
+  ]
+}

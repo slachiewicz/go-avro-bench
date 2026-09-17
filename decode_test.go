@@ -54,6 +54,23 @@ func BenchmarkDecodeDynamic(b *testing.B) {
 				}
 			})
 
+			// twmb-alias is the same decode with AliasInput, which twmb added
+			// on 2026-08-18: strings and byte slices point into the payload
+			// instead of being copied. Only a consumer that owns each
+			// message's buffer for as long as it holds the value can use it,
+			// so it is a separate arm, not a replacement for the one above.
+			b.Run("twmb-alias", func(b *testing.B) {
+				s := twmb.MustParse(c.SchemaJSON)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					var out any
+					if _, err := s.Decode(c.Payload, &out, twmb.AliasInput()); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+
 			b.Run("goavro", func(b *testing.B) {
 				codec, err := goavro.NewCodec(c.SchemaJSON)
 				if err != nil {
@@ -104,6 +121,18 @@ func BenchmarkDecodeTyped(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					if _, err := s.Decode(c.Payload, c.NewTyped()); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+
+			// See twmb-alias under BenchmarkDecodeDynamic.
+			b.Run("twmb-alias", func(b *testing.B) {
+				s := twmb.MustParse(c.SchemaJSON)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, err := s.Decode(c.Payload, c.NewTyped(), twmb.AliasInput()); err != nil {
 						b.Fatal(err)
 					}
 				}

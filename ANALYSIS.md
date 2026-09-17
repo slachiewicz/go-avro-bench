@@ -19,16 +19,27 @@ reference implementation" is not available as a tie-breaker.
 | `heetch/avro` | 95 | 2025-06-20 | Low activity. Code generation plus schema-registry support. |
 | `go-avro/avro` | 55 | 2022-05-17 | Dead. |
 | `khezen/avro` | 49 | 2024-11-27 | Dormant. |
-| `twmb/avro` | 29 | 2026-08-11 | Active. By the `franz-go` author. Single dependency: `klauspost/compress`. Last tag 2026-04-30. |
-| `iskorotkov/avro/v2` | 16 | 2026-07-29 | Fork of `hamba/avro`, carries the GO-2026-5048 fix. |
+| `twmb/avro` | 33 | 2026-09-06 | Active. By the `franz-go` author. Single dependency: `klauspost/compress`. Last tag `v1.9.0`, 2026-09-06. Requires Go 1.26. |
+| `iskorotkov/avro/v2` | 19 | 2026-09-09 | Fork of `hamba/avro`, carries the GO-2026-5048 fix. Last tag `v2.34.0`, 2026-08-18. |
 
-Two things about `twmb/avro` that the table cannot show. It has not cut a tag
-since 2026-04-30 despite steady development, and the gap is not cosmetic: main
-is 25-35% faster than `v1.7.2` at dynamic decode and 58% faster to parse
-([RESULTS.md](RESULTS.md)). Adopting it means pinning an untagged commit, which
-is what `redpanda-data/connect` does. And it is one maintainer at 29 stars —
-against `hamba`'s 509 at the point it was archived, which is a reminder that
-stars did not keep that one alive either.
+Two things about `twmb/avro` that the table cannot show. Its tagging had
+stalled — nothing between `v1.7.2` on 2026-04-30 and `v1.8.0` on 2026-08-14,
+while main pulled 25-35% ahead of the tag at dynamic decode and 58% at parse
+([RESULTS.md](RESULTS.md)) — and `v1.9.0` followed on 2026-09-06, so that
+signal has since cleared. Main still runs ahead of the tag, though: 30 commits
+landed on the day `v1.9.0` was cut, and `redpanda-data/connect` pins a commit,
+not a tag. And it is one maintainer at 33 stars — against `hamba`'s 509 at the
+point it was archived, which is a reminder that stars did not keep that one
+alive either.
+
+Between 2026-08-11 and 2026-09-06 twmb also added `SkipUnknown` (decode into a
+struct that omits fields), `AliasInput` (zero-copy strings and bytes), and
+`ocf.WithDecodeOpts`, and its byte slices now share the string slab — the
+allocation profile in [RESULTS.md](RESULTS.md) predates those.
+`iskorotkov/avro` dropped `json-iterator` for the standard library and fixed
+`soe.Codec.Encode` handing consecutive callers the same backing array — a
+hamba v2.31.0 bug that is now permanent there, see
+[CAPABILITIES.md](CAPABILITIES.md).
 
 ## The archive event and what followed
 
@@ -45,7 +56,7 @@ fix against the fork: `github.com/iskorotkov/avro/v2 < 2.33.0`, patched in
 Two migration targets have emerged, and they are not equivalent:
 
 - **`iskorotkov/avro/v2`** — a fork. Same API, same behaviour, CVE patched.
-  A drop-in, and a bet on a 16-star repository staying alive.
+  A drop-in, and a bet on a 19-star repository staying alive.
 - **`twmb/avro`** — a rewrite, not a fork. Different API, actively developed,
   and explicitly aiming to combine what `goavro` and `hamba` each have.
 

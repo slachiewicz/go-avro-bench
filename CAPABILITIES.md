@@ -6,8 +6,12 @@ implement its existing paths at all.
 
 Probed by `TestFeatureParity` and the skip reasons recorded in
 `encodings_test.go`, `ocf_test.go` and `pipeline_test.go`. Versions are the ones
-pinned in `go.mod`: hamba v2.31.0 (final, archived), iskorotkov v2.33.2-dev,
-twmb v1.7.3-dev, goavro v2.15.1-dev.
+pinned in `go.mod`: hamba v2.31.0 (final, archived), iskorotkov main at
+`362766d` (v2.34.0 plus 6 commits), twmb main at `16bc6f5` (v1.9.0 plus 30
+commits), goavro master at `c69e26c` (v2.15.0 plus 1 commit, unchanged since
+2026-01-21). The textual-codec rows are hard-coded skips, not probes; they
+were re-checked against those commits by grepping the module source, not by
+running anything.
 
 ## Wire encodings
 
@@ -25,7 +29,7 @@ textual — plus `internal/impl/avro/scanner.go:119`, `internal/codec/reader.go:
 and `internal/impl/avro/processor.go`, which exposes textual to users in both
 directions.
 
-hamba v2.31.0 and iskorotkov v2.33.2-dev have no Avro textual data codec
+hamba v2.31.0 and iskorotkov main have no Avro textual data codec
 anywhere: the core package's only JSON methods serialise the schema itself, and
 `ocf/`, `soe/`, `registry/`, `gen/`, `cmd/` and `pkg/` contain none. Adopting
 either means writing that codec.
@@ -36,6 +40,29 @@ number formatting — with one difference: it emits fields in schema order where
 goavro emits Go map-iteration order, which varies run to run. `serde_avro.go:207`
 puts that JSON straight into user pipelines, so a migration would make output
 field order deterministic. A behaviour change, and probably an improvement.
+
+### Single-object encode returns a buffer the caller does not own
+
+`TestFeatureParity/single_object_encode_ownership` encodes two values back to
+back through one codec and checks whether the first result survives:
+
+| | first result intact | shares backing array |
+| --- | --- | --- |
+| hamba v2.31.0 | **no** — `...02` became `...04` | **yes** |
+| iskorotkov | yes | no |
+| twmb | yes | no |
+| goavro | yes | no |
+
+hamba's `soe.Codec.Encode` is `append(c.header, data...)` against a cached
+header with spare capacity, so any payload that fits in that slack — six bytes
+on the probe's one-field record — lands in the same array as the previous
+call's result. The harness fixtures never showed it because they all overflow
+the header and force a fresh allocation. hamba is archived, so this stays in
+its final release. iskorotkov fixed it on 2026-08-18
+([PR #37](https://github.com/iskorotkov/avro/pull/37)) and added
+`AppendEncode` for callers that want to manage the buffer themselves; on the
+fixtures the fix costs no allocations. twmb and goavro take the destination
+buffer as an argument, so ownership is the caller's by construction.
 
 ## Encoding from generic JSON
 

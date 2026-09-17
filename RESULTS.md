@@ -6,6 +6,12 @@ Regenerate with `make bench && make stat`.
 Library versions are branch tips, not tags — which turns out to matter, see
 below. hamba is pinned at v2.31.0 because that is its final release.
 
+The tables were collected against twmb `v1.7.3-0.20260811190909` and
+iskorotkov `v2.33.2-0.20260610201905` on Go 1.26.5. `go.mod` has since moved
+to twmb `16bc6f5` (v1.9.0 plus 30 commits), iskorotkov `362766d` (v2.34.0
+plus 6) and Go 1.27.1; the section "Pins moved" at the end records what that
+changed. The tables have not been recollected.
+
 434 benchmark arms, 10 samples each, 5.0 billion iterations, collected in
 separate processes per family from one tree. Raw data is in `part1.txt` through
 `part5.txt`. The `v1.7.2` column in the version section below is the only figure
@@ -111,9 +117,10 @@ The same `twmb/avro` code path, tag `v1.7.2` against main
 | Parse flat | 33.50µ | **14.01µ** | −58% |
 | Parse flat allocs | 336 | **190** | −43% |
 
-twmb has not cut a tag since 2026-04-30 while developing steadily, so anyone
-benchmarking it from its latest release is measuring something materially slower
-than its main. `redpanda-data/connect` pins an untagged commit.
+When that was measured twmb had not cut a tag since 2026-04-30, so anyone
+benchmarking it from its latest release was measuring something materially
+slower than its main. `v1.8.0` (2026-08-14) and `v1.9.0` (2026-09-06) have
+since closed that gap. `redpanda-data/connect` pins a commit, not a tag.
 
 hamba, iskorotkov and goavro reproduced within a few percent across those two
 runs, so this is the library moving, not the harness.
@@ -211,6 +218,62 @@ twmb allocates least: 190 against goavro's 271 and hamba's 621.
 
 Parsing costs roughly 20–70× a single decode either way, so whether a pipeline
 caches a codec per schema matters more than which codec it caches.
+
+## Pins moved, 2026-09-17
+
+`go.mod` moved twmb from `81123696` (2026-08-11) to `16bc6f5b` (v1.9.0 plus
+30 commits, 2026-09-06), iskorotkov from `972eeffc` (2026-06-10) to `362766d4`
+(v2.34.0 plus 6, 2026-08-19), and the `go` directive to 1.27.1. goavro's
+master had not moved. `DecodeDynamic`, `SRDecode` and `Parse` were run on both
+pins, `-count=6`, same toolchain (go1.27.1 was already the local toolchain
+under the old directive), on a loaded machine: hamba and goavro, whose code
+did not change, drifted +5% to +21% slower between the two runs on `Parse`
+and up to +9% on `DecodeDynamic`, so that is the noise floor for `ns/op`
+here. `allocs/op` and `B/op` are exact.
+
+twmb's schema compilation is the one thing that moved outside that floor:
+
+| Parse | old | new | ns | allocs old → new | B/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| flat | 16.32µ | **8.867µ** | −46% | 198 → **153** (−23%) | −20% |
+| nested | 27.22µ | **15.86µ** | −42% | 334 → **264** (−21%) | −19% |
+| union | 33.02µ | **18.98µ** | −43% | 475 → **377** (−21%) | −20% |
+| wide | 171.4µ | **110.3µ** | −36% | 2522 → **2058** (−18%) | −21% |
+
+With the controls drifting the other way, those `ns` figures are conservative.
+The "Schema compilation" table above has twmb behind goavro on `flat`; on the
+new pin the order is likely reversed, but that table was not recollected.
+
+Decode did not move. twmb dropped one allocation on `flat` (11 → 10) and
+`union` (22 → 21) in `DecodeDynamic`, and the same one in `SRDecode` (16 → 15,
+36 → 35); every other twmb and iskorotkov alloc count is identical, and every
+`ns/op` change is inside the control drift. `nested` and `wide` are unchanged
+on both.
+
+iskorotkov's `soe.Codec.Encode` fix (an owned buffer instead of appending to
+the cached header, see [CAPABILITIES.md](CAPABILITIES.md)) costs nothing on
+the fixtures: `EncodingEncode/single-object/typed` is 2 allocs on `flat` and
+`wide` before and after, because those payloads already overflowed the
+header's capacity and forced a fresh allocation.
+
+### twmb `AliasInput`
+
+twmb added `AliasInput()` on 2026-08-18: decoded strings and byte slices
+point into the payload rather than being copied. `DecodeDynamic` and
+`DecodeTyped` carry it as a `twmb-alias` arm, `-count=3`, new pin:
+
+| | twmb | twmb-alias | ns | B/op |
+| --- | ---: | ---: | ---: | ---: |
+| DecodeDynamic union | 864.2n, 1103 B | **814.2n**, 1008 B | −5.8% | −9% |
+| DecodeDynamic wide | 2.576µ, 2707 B | **2.537µ**, 2640 B | −1.5% | −2% |
+| DecodeTyped flat | 120.6n, 105 B, 2 allocs | **112.0n**, 80 B, **1 alloc** | −7% | −24% |
+| DecodeTyped union | 600.6n, 687 B | **549.5n**, 592 B | −8.5% | −14% |
+
+Smaller than it sounds, because twmb already packs every string in a decode
+into one shared slab, so aliasing removes bytes, not allocations — one alloc
+on typed `flat`, none elsewhere. It is a 5-9% option for a consumer that
+owns each message buffer for the life of the decoded value, and unusable for
+one that reuses buffers, which is why it is a separate arm.
 
 ## What decides it is not in this file
 

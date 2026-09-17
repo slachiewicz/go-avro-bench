@@ -8,7 +8,9 @@ import (
 	"time"
 
 	hamba "github.com/hamba/avro/v2"
+	hambasoe "github.com/hamba/avro/v2/soe"
 	isko "github.com/iskorotkov/avro/v2"
+	iskosoe "github.com/iskorotkov/avro/v2/soe"
 	goavro "github.com/linkedin/goavro/v2"
 	twmb "github.com/twmb/avro"
 )
@@ -38,6 +40,7 @@ func TestFeatureParity(t *testing.T) {
 	t.Run("schema_evolution", testSchemaEvolution)
 	t.Run("schema_references", testSchemaReferences)
 	t.Run("default_missing_field", testDefaultMissingField)
+	t.Run("single_object_encode_ownership", testSingleObjectEncodeOwnership)
 }
 
 // probeDynamic decodes payload into `any` and reports the error rather than
@@ -331,5 +334,68 @@ func testDefaultMissingField(t *testing.T) {
 		}
 		m := out.(map[string]any)
 		logField(t, lib, "email", m["email"])
+	}
+}
+
+// tinyRecord encodes to five bytes, small enough to fit in whatever spare
+// capacity a codec's cached single-object header carries.
+type tinyRecord struct {
+	N int32 `avro:"n"`
+}
+
+const tinySchemaJSON = `{"type":"record","name":"Tiny","fields":[{"name":"n","type":"int"}]}`
+
+// testSingleObjectEncodeOwnership encodes two different values back to back
+// through each library's single-object path and checks whether the first
+// result survives the second call. A codec that appends the payload to its
+// cached header hands both callers the same backing array whenever the
+// payload fits in the header's spare capacity, so the earlier result changes
+// under the caller — visible only on small records, which is why the fixtures
+// in Cases never showed it. iskorotkov fixed this in its soe package
+// (PR #37, merged 2026-08-18); hamba v2.31.0 is the last release and carries it.
+func testSingleObjectEncodeOwnership(t *testing.T) {
+	// One codec per library, held across both calls the way a pipeline holds
+	// it. twmb and goavro have no codec object for this path: the caller
+	// passes the destination buffer, so ownership is theirs by construction.
+	hambaCodec, err := hambasoe.NewCodec(hamba.MustParse(tinySchemaJSON))
+	if err != nil {
+		t.Fatalf("hamba: %v", err)
+	}
+	iskoCodec, err := iskosoe.NewCodec(isko.MustParse(tinySchemaJSON))
+	if err != nil {
+		t.Fatalf("iskorotkov: %v", err)
+	}
+	twmbSchema := twmb.MustParse(tinySchemaJSON)
+	goavroCodec, err := goavro.NewCodec(tinySchemaJSON)
+	if err != nil {
+		t.Fatalf("goavro: %v", err)
+	}
+	encoders := map[string]func(v *tinyRecord) ([]byte, error){
+		"hamba":      func(v *tinyRecord) ([]byte, error) { return hambaCodec.Encode(v) },
+		"iskorotkov": func(v *tinyRecord) ([]byte, error) { return iskoCodec.Encode(v) },
+		"twmb":       func(v *tinyRecord) ([]byte, error) { return twmbSchema.AppendSingleObject(nil, v) },
+		"goavro": func(v *tinyRecord) ([]byte, error) {
+			return goavroCodec.SingleFromNative(nil, map[string]any{"n": v.N})
+		},
+	}
+	for _, lib := range libs {
+		enc := encoders[lib]
+		a, err := enc(&tinyRecord{N: 1})
+		if err != nil {
+			t.Errorf("%s: first encode: %v", lib, err)
+			continue
+		}
+		snapshot := append([]byte(nil), a...)
+		b, err := enc(&tinyRecord{N: 2})
+		if err != nil {
+			t.Errorf("%s: second encode: %v", lib, err)
+			continue
+		}
+		intact := string(a) == string(snapshot)
+		shared := &a[0] == &b[0]
+		t.Logf("%-11s first result intact after second encode: %-5v shares backing array: %v", lib, intact, shared)
+		if !intact {
+			t.Logf("%-11s first was %x, became %x", lib, snapshot, a)
+		}
 	}
 }

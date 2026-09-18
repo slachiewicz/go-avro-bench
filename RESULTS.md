@@ -9,8 +9,9 @@ below. hamba is pinned at v2.31.0 because that is its final release.
 The tables were collected against twmb `v1.7.3-0.20260811190909` and
 iskorotkov `v2.33.2-0.20260610201905` on Go 1.26.5. `go.mod` has since moved
 to twmb `16bc6f5` (v1.9.0 plus 30 commits), iskorotkov `362766d` (v2.34.0
-plus 6) and Go 1.27.1; the section "Pins moved" at the end records what that
-changed. The tables have not been recollected.
+plus 6) and Go 1.27.1. A full recollection on those pins is in
+`runs/2026-09-18/`; the section "Pins moved" at the end says what it changed
+and why the tables here were kept.
 
 434 benchmark arms, 10 samples each, 5.0 billion iterations, collected in
 separate processes per family from one tree. Raw data is in `part1.txt` through
@@ -219,61 +220,139 @@ twmb allocates least: 190 against goavro's 271 and hamba's 621.
 Parsing costs roughly 20–70× a single decode either way, so whether a pipeline
 caches a codec per schema matters more than which codec it caches.
 
-## Pins moved, 2026-09-17
+## Pins moved, 2026-09-17: a full recollection
 
 `go.mod` moved twmb from `81123696` (2026-08-11) to `16bc6f5b` (v1.9.0 plus
 30 commits, 2026-09-06), iskorotkov from `972eeffc` (2026-06-10) to `362766d4`
-(v2.34.0 plus 6, 2026-08-19), and the `go` directive to 1.27.1. goavro's
-master had not moved. `DecodeDynamic`, `SRDecode` and `Parse` were run on both
-pins, `-count=6`, same toolchain (go1.27.1 was already the local toolchain
-under the old directive), on a loaded machine: hamba and goavro, whose code
-did not change, drifted +5% to +21% slower between the two runs on `Parse`
-and up to +9% on `DecodeDynamic`, so that is the noise floor for `ns/op`
-here. `allocs/op` and `B/op` are exact.
+(v2.34.0 plus 6, 2026-08-19), the `go` directive from 1.26.5 to 1.27.1, and
+with them `klauspost/compress` 1.18.4 → 1.19.2 and `mapstructure` 2.4.0 →
+2.5.0. goavro's master had not moved. All five families were then recollected
+on 2026-09-18, `-count=10`, one process each, 4,420 samples; raw data is in
+`runs/2026-09-18/part1.txt` through `part5.txt`, and the figures below are
+benchstat over that against the committed `part*.txt`.
 
-twmb's schema compilation is the one thing that moved outside that floor:
+The tables above were **not** replaced. The recollection was noisier than the
+committed data in four families — mean interval width `Parse` ±10.5%,
+`SREncode` ±8.7%, `DecodeStage` ±6.7%, `OCFWrite` ±6.2%, against ±2.4%, ±0.2%,
+±0.1% and ±0.3% in the committed runs — so the `ns/op` claims here lean on the
+tight rows and on isolated reruns; `allocs/op` and `B/op` are exact either
+way.
 
-| Parse | old | new | ns | allocs old → new | B/op |
+Three things moved, and only one of them is an Avro library.
+
+### twmb: schema compilation, and one allocation per decode
+
+| Parse | committed | recollected | ns | allocs | B/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| flat | 16.32µ | **8.867µ** | −46% | 198 → **153** (−23%) | −20% |
-| nested | 27.22µ | **15.86µ** | −42% | 334 → **264** (−21%) | −19% |
-| union | 33.02µ | **18.98µ** | −43% | 475 → **377** (−21%) | −20% |
-| wide | 171.4µ | **110.3µ** | −36% | 2522 → **2058** (−18%) | −21% |
+| flat | 14.01µ | **8.439µ** | −40% | 190 → **153** | −22% |
+| nested | 24.54µ | **15.39µ** | −37% | 321 → **264** | −17% |
+| union | 30.53µ | **23.60µ** | −23% | 454 → **377** | −30% |
+| wide | 171.5µ | **124.3µ** | −28% | 2427 → **2058** | −34% |
 
-With the controls drifting the other way, those `ns` figures are conservative.
-The "Schema compilation" table above has twmb behind goavro on `flat`; on the
-new pin the order is likely reversed, but that table was not recollected.
+twmb now compiles `flat` faster than goavro (8.439µ against 12.96µ); the
+"Schema compilation" table above had goavro ahead. The `union` and `wide`
+rows carry ±11-18% intervals, the others ±4-6%.
 
-Decode did not move. twmb dropped one allocation on `flat` (11 → 10) and
-`union` (22 → 21) in `DecodeDynamic`, and the same one in `SRDecode` (16 → 15,
-36 → 35); every other twmb and iskorotkov alloc count is identical, and every
-`ns/op` change is inside the control drift. `nested` and `wide` are unchanged
-on both.
+One allocation is gone on `flat` (11 → 10 dynamic) and `union` (22 → 21
+dynamic, 10 → 9 typed) in every family that decodes — `DecodeDynamic`,
+`DecodeTyped`, `SRDecode`, `EncodingDecode`, `PulsarPattern` — and
+`OCFRead/union` typed drops 10% of its allocations. `nested` and `wide` are
+unchanged. `ns/op` on decode is inside the noise.
 
-iskorotkov's `soe.Codec.Encode` fix (an owned buffer instead of appending to
-the cached header, see [CAPABILITIES.md](CAPABILITIES.md)) costs nothing on
-the fixtures: `EncodingEncode/single-object/typed` is 2 allocs on `flat` and
-`wide` before and after, because those payloads already overflowed the
-header's capacity and forced a fresh allocation.
+### Go 1.27.1: `encoding/json` is now the v2 implementation
+
+Go 1.27 enables `GOEXPERIMENT=jsonv2` by default. One arm, three toolchain
+settings, `-count=3`, same pins:
+
+| `SREncode/flat/twmb-bare` | ns/op | B/op | allocs |
+| --- | ---: | ---: | ---: |
+| Go 1.27.1, default | 1890 | 712 | 25 |
+| Go 1.27.1, `GOEXPERIMENT=jsonv2` | 1937 | 712 | 25 |
+| Go 1.27.1, `GOEXPERIMENT=nojsonv2` | **1432** | 864 | 29 |
+
+`json.Unmarshal` into `any` is 32% slower and allocates less. That is not a
+twmb result — `twmb-bare` is `json.Unmarshal` then `Encode` — and it reaches
+every arm that goes through the standard library: hamba and iskorotkov
+`SRDecode` (they `json.Marshal` the decoded tree because they have no textual
+codec; `flat` 35 → 41 allocs at −20% B/op, `nested` 107 → 89 at −32%, and
++11% to +35% ns), `twmb-bare` `SREncode` (+25% to +46% ns, `flat` 29 → 25
+allocs), all `SREncodeCoerced` arms, and goavro's std-JSON mode, which got
+faster: `SREncode/wide/goavro-stdjson` 25.21µ → 22.41µ, 560 → 452 allocs,
+−36% B/op. `twmb-wrapped` (`DecodeJSON`) and `goavro-plain`
+(`NativeFromTextual`) parse their own JSON and did not move.
+
+That shifts one ranking. `SREncode/union`: `goavro-plain` 3.168µ now edges
+`twmb-wrapped` 3.422µ (±17%) and `twmb-bare` 3.701µ, where the committed
+table had `twmb-bare` at 2.845µ in front. The end-to-end decode ranking
+survives untouched: twmb leads `SRDecode` on every schema, by 1.37× (`flat`),
+1.46× (`nested`), 1.18× (`union`) and 1.47× (`wide`) over goavro's faster
+mode, and by 1.48× to 2.91× over hamba, whose gap widened because its arm
+pays the `encoding/json` cost twice.
+
+For Bento this outranks any Avro number in this section: `schema_registry_encode`
+takes JSON in through `encoding/json`, so a Go 1.27 build changes that path's
+cost before any codec swap does.
+
+### Go 1.27.1 and `klauspost/compress`: OCF compression
+
+`OCFWrite/wide/deflate`, all ±0-1%:
+
+| | committed | recollected | ns | B/op |
+| --- | ---: | ---: | ---: | ---: |
+| hamba, typed | 1.408m | 1.835m | +30% | +31% |
+| iskorotkov, typed | 1.497m | 1.894m | +27% | +31% |
+| twmb, typed | 871.2µ | 904.8µ | +4% | +29% |
+| goavro, dynamic | 2.507m | **2.369m** | −5% | +15% |
+
+hamba, iskorotkov and goavro deflate through the standard library's
+`compress/flate`; an isolated rerun of `OCFWrite/flat/deflate/typed/hamba`
+under Go 1.26.5 and 1.27.1 with identical pins gives 8.2 MB against 10.8 MB
+per op and +18% ns, so that is Go. twmb deflates through `klauspost/compress`
+and moved 4%. The klauspost bump is visible elsewhere: twmb's snappy `B/op` on
+`wide` fell from 1018 KiB to 592 KiB (−42%), and the same isolated rerun shows
+no Go 1.26/1.27 difference for it.
+
+### `mapstructure` 2.5.0: hamba parses with a third more allocations
+
+hamba's schema parser is built on `go-viper/mapstructure`. `Parse` allocations
+went from 621 to 829 on `flat` (+33%), 1020 → 1368 `nested`, 923 → 1207
+`union`, 4092 → 5262 `wide`, at +8% B/op — identical under Go 1.26.5 and
+1.27.1, so it is the dependency. iskorotkov's counts did not change. An
+archived library cannot pin its way out of this; it is a cost of standing
+still that the fork does not pay.
+
+### Typed decode, recollected
+
+| Schema | hamba | iskorotkov | twmb |
+| --- | ---: | ---: | ---: |
+| flat | 115.8n | **108.2n** | 123.6n |
+| nested | 298.0n | **275.0n** | 376.1n |
+| union | 625.1n | **511.8n** | 629.0n |
+| wide | 1.631µ | **759.2n** | 791.1n |
+
+iskorotkov leads every shape; the committed table had twmb ahead on `flat`
+and `wide`. twmb's `flat` reads +10% here at ±3%, but an isolated `-count=3`
+rerun gives 112.1n, the committed figure, so that row is run noise rather
+than a regression. `wide` is real: 759.2n against 791.1n, both ±1%.
 
 ### twmb `AliasInput`
 
 twmb added `AliasInput()` on 2026-08-18: decoded strings and byte slices
 point into the payload rather than being copied. `DecodeDynamic` and
-`DecodeTyped` carry it as a `twmb-alias` arm, `-count=3`, new pin:
+`DecodeTyped` carry it as a `twmb-alias` arm, `-count=10`:
 
 | | twmb | twmb-alias | ns | B/op |
 | --- | ---: | ---: | ---: | ---: |
-| DecodeDynamic union | 864.2n, 1103 B | **814.2n**, 1008 B | −5.8% | −9% |
-| DecodeDynamic wide | 2.576µ, 2707 B | **2.537µ**, 2640 B | −1.5% | −2% |
-| DecodeTyped flat | 120.6n, 105 B, 2 allocs | **112.0n**, 80 B, **1 alloc** | −7% | −24% |
-| DecodeTyped union | 600.6n, 687 B | **549.5n**, 592 B | −8.5% | −14% |
+| DecodeDynamic union | 884.5n, 1103 B | **822.4n**, 1008 B | −7% | −9% |
+| DecodeDynamic wide | 2.619µ, 2707 B | **2.580µ**, 2641 B | −1.5% | −2% |
+| DecodeTyped flat | 123.6n, 105 B, 2 allocs | **113.5n**, 80 B, **1 alloc** | −8% | −24% |
+| DecodeTyped union | 629.0n, 687 B | **572.2n**, 592 B | −9% | −14% |
 
 Smaller than it sounds, because twmb already packs every string in a decode
 into one shared slab, so aliasing removes bytes, not allocations — one alloc
-on typed `flat`, none elsewhere. It is a 5-9% option for a consumer that
-owns each message buffer for the life of the decoded value, and unusable for
-one that reuses buffers, which is why it is a separate arm.
+on typed `flat`, none elsewhere. It is a 7-9% option for a consumer that owns
+each message buffer for the life of the decoded value, and unusable for one
+that reuses buffers, which is why it is a separate arm.
 
 ## What decides it is not in this file
 

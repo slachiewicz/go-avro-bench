@@ -37,8 +37,13 @@ go test -run '^$' -bench 'BenchmarkDecodeDynamic/union' -benchmem -count=10 .
 
 Published numbers were collected one family per process (`-bench
 '^BenchmarkOCF'` etc.) into `part1.txt`–`part5.txt`, which are committed raw
-data; the table below says which family lives in which file. Run
-benchmarks on a quiet machine: `allocs/op` is stable, `ns/op` is not.
+data; the table below says which family lives in which file. Later full
+recollections live under `runs/<date>/part*.txt` and are cited from
+`RESULTS.md` without replacing the top-level set. Run benchmarks on a quiet
+machine: `allocs/op` is stable, `ns/op` is not — a Go toolchain bump can move
+`encoding/json` and `compress/flate` arms by 30% on its own, so rerun one arm
+under both toolchains (`GOTOOLCHAIN=goX -modfile=<copy with old go line>`)
+before attributing a shift to a library.
 
 ## Layout
 

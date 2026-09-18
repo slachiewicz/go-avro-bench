@@ -56,7 +56,11 @@ fix against the fork: `github.com/iskorotkov/avro/v2 < 2.33.0`, patched in
 Two migration targets have emerged, and they are not equivalent:
 
 - **`iskorotkov/avro/v2`** — a fork. Same API, same behaviour, CVE patched.
-  A drop-in, and a bet on a 19-star repository staying alive.
+  A drop-in, and a bet on a 19-star repository staying alive. It also keeps
+  its dependencies moving: hamba's frozen `go.mod` now resolves to
+  `mapstructure` 2.5.0, which costs its schema parser a third more
+  allocations ([RESULTS.md](RESULTS.md), "Pins moved"), while the fork's
+  count did not change.
 - **`twmb/avro`** — a rewrite, not a fork. Different API, actively developed,
   and explicitly aiming to combine what `goavro` and `hamba` each have.
 
